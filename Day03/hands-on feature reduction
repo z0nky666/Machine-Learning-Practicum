@@ -1,0 +1,283 @@
+# ========== 1. 导入实验所需工具库 ==========
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+# 配置中文字体，避免图表中文乱码
+plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'Arial Unicode MS']
+plt.rcParams['axes.unicode_minus'] = False
+
+from sklearn.datasets import load_digits
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.model_selection import train_test_split
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import accuracy_score
+from sklearn.neighbors import NeighborhoodComponentsAnalysis
+
+# ========== 2. 数据加载与预处理 ==========
+print("=" * 60)
+print("【数据加载与预处理】")
+print("=" * 60)
+digits = load_digits()
+X = digits.data
+y = digits.target
+print(f"样本数：{X.shape[0]}，原始特征维度：{X.shape[1]}，类别数：{len(np.unique(y))}")
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.3, random_state=42
+)
+
+scaler = StandardScaler()
+X_train_std = scaler.fit_transform(X_train)
+X_test_std = scaler.transform(X_test)
+print("数据已按 7:3 划分并完成标准化\n")
+
+
+# ========== 3. 基准实验：原始64维 ==========
+print("=" * 60)
+print("【1. 基准实验：原始64维 kNN】")
+print("=" * 60)
+knn_original = KNeighborsClassifier(n_neighbors=5)
+knn_original.fit(X_train_std, y_train)
+y_pred_original = knn_original.predict(X_test_std)
+acc_original = accuracy_score(y_test, y_pred_original)
+print(f"分类准确率：{acc_original:.4f}")
+print(f"特征维度：64\n")
+
+
+# ========== 4. PCA降维到2维 ==========
+print("=" * 60)
+print("【2. PCA降维到2维】")
+print("=" * 60)
+pca_2d = PCA(n_components=2, random_state=42)
+X_train_2d = pca_2d.fit_transform(X_train_std)
+X_test_2d = pca_2d.transform(X_test_std)
+
+knn_2d = KNeighborsClassifier(n_neighbors=5)
+knn_2d.fit(X_train_2d, y_train)
+y_pred_2d = knn_2d.predict(X_test_2d)
+acc_2d = accuracy_score(y_test, y_pred_2d)
+info_2d = sum(pca_2d.explained_variance_ratio_)
+print(f"分类准确率：{acc_2d:.4f}")
+print(f"特征维度：2")
+print(f"累计信息保留率：{info_2d:.4f} ({info_2d*100:.2f}%)\n")
+
+# ---- 画2维散点图 ----
+plt.figure(figsize=(10, 7))
+scatter = plt.scatter(
+    X_train_2d[:, 0],
+    X_train_2d[:, 1],
+    c=y_train,
+    cmap=plt.cm.tab10,
+    alpha=0.7,
+    s=15
+)
+plt.colorbar(scatter, ticks=range(10), label='数字类别')
+plt.title(f'PCA降维到2维的手写数字分布\n准确率：{acc_2d:.4f}，信息保留率：{info_2d:.2%}', fontsize=12)
+plt.xlabel('第一主成分（PC1）')
+plt.ylabel('第二主成分（PC2）')
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig("PCA_2D_可视化.png", dpi=300, bbox_inches="tight")
+plt.show()
+print("✅ 2维散点图已保存：PCA_2D_可视化.png\n")
+
+
+# ========== 5. PCA降维到10维 ==========
+print("=" * 60)
+print("【3. PCA降维到10维】")
+print("=" * 60)
+pca_10d = PCA(n_components=10, random_state=42)
+X_train_10d = pca_10d.fit_transform(X_train_std)
+X_test_10d = pca_10d.transform(X_test_std)
+
+knn_10d = KNeighborsClassifier(n_neighbors=5)
+knn_10d.fit(X_train_10d, y_train)
+y_pred_10d = knn_10d.predict(X_test_10d)
+acc_10d = accuracy_score(y_test, y_pred_10d)
+info_10d = sum(pca_10d.explained_variance_ratio_)
+print(f"分类准确率：{acc_10d:.4f}")
+print(f"特征维度：10")
+print(f"累计信息保留率：{info_10d:.4f} ({info_10d*100:.2f}%)\n")
+
+# ---- 画10维降维效果图（取前两个主成分投影） ----
+plt.figure(figsize=(10, 7))
+scatter = plt.scatter(
+    X_train_10d[:, 0],
+    X_train_10d[:, 1],
+    c=y_train,
+    cmap=plt.cm.tab10,
+    alpha=0.7,
+    s=15
+)
+plt.colorbar(scatter, ticks=range(10), label='数字类别')
+plt.title(f'PCA降维到10维（展示前2个主成分投影）\n准确率：{acc_10d:.4f}，信息保留率：{info_10d:.2%}', fontsize=12)
+plt.xlabel('第一主成分（PC1）')
+plt.ylabel('第二主成分（PC2）')
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig("PCA_10D_可视化.png", dpi=300, bbox_inches="tight")
+plt.show()
+print("✅ 10维散点图（前2主成分）已保存：PCA_10D_可视化.png\n")
+
+
+# ========== 6. PCA自动选维 ==========
+print("=" * 60)
+print("【4. PCA自动选维（保留95%信息）】")
+print("=" * 60)
+pca_auto = PCA(n_components=0.95, random_state=42)
+X_train_auto = pca_auto.fit_transform(X_train_std)
+X_test_auto = pca_auto.transform(X_test_std)
+
+knn_auto = KNeighborsClassifier(n_neighbors=5)
+knn_auto.fit(X_train_auto, y_train)
+y_pred_auto = knn_auto.predict(X_test_auto)
+acc_auto = accuracy_score(y_test, y_pred_auto)
+info_auto = sum(pca_auto.explained_variance_ratio_)
+print(f"分类准确率：{acc_auto:.4f}")
+print(f"自动选择的维度数：{pca_auto.n_components_}")
+print(f"实际累计信息保留率：{info_auto:.4f} ({info_auto*100:.2f}%)\n")
+
+# ---- 画自动降维效果图（取前两个主成分投影） ----
+plt.figure(figsize=(10, 7))
+scatter = plt.scatter(
+    X_train_auto[:, 0],
+    X_train_auto[:, 1],
+    c=y_train,
+    cmap=plt.cm.tab10,
+    alpha=0.7,
+    s=15
+)
+plt.colorbar(scatter, ticks=range(10), label='数字类别')
+plt.title(f'PCA自动降维（{pca_auto.n_components_}维，展示前2个主成分投影）\n准确率：{acc_auto:.4f}，信息保留率：{info_auto:.2%}', fontsize=12)
+plt.xlabel('第一主成分（PC1）')
+plt.ylabel('第二主成分（PC2）')
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig("PCA_自动降维_可视化.png", dpi=300, bbox_inches="tight")
+plt.show()
+print("✅ 自动降维散点图已保存：PCA_自动降维_可视化.png\n")
+
+
+# ========== 7. 度量学习（NCA）效果可视化 ==========
+print("=" * 60)
+print("【5. 度量学习（NCA）优化kNN】")
+print("=" * 60)
+nca = NeighborhoodComponentsAnalysis(n_components=64, random_state=42)
+nca.fit(X_train_std, y_train)
+X_train_nca = nca.transform(X_train_std)
+X_test_nca = nca.transform(X_test_std)
+
+knn_nca = KNeighborsClassifier(n_neighbors=5)
+knn_nca.fit(X_train_nca, y_train)
+y_pred_nca = knn_nca.predict(X_test_nca)
+acc_nca = accuracy_score(y_test, y_pred_nca)
+print(f"分类准确率：{acc_nca:.4f}")
+print(f"特征维度：64（距离度量被优化）\n")
+
+# ---- NCA效果可视化（取前两个变换后的维度） ----
+# NCA本身不降维，但我们可以取变换后的前2个维度画图，展示距离优化效果
+plt.figure(figsize=(10, 7))
+scatter = plt.scatter(
+    X_train_nca[:, 0],
+    X_train_nca[:, 1],
+    c=y_train,
+    cmap=plt.cm.tab10,
+    alpha=0.7,
+    s=15
+)
+plt.colorbar(scatter, ticks=range(10), label='数字类别')
+plt.title(f'NCA度量学习效果（展示变换后前2个维度）\n准确率：{acc_nca:.4f}，维度：64（未降维）', fontsize=12)
+plt.xlabel('变换后维度1')
+plt.ylabel('变换后维度2')
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig("NCA_可视化.png", dpi=300, bbox_inches="tight")
+plt.show()
+print("✅ NCA效果图已保存：NCA_可视化.png\n")
+
+
+# ========== 8. 综合对比图 ==========
+print("=" * 60)
+print("【生成综合对比图】")
+print("=" * 60)
+
+# 准备对比数据
+methods = ["原始64维", "PCA 2维", "PCA 10维", "PCA 自动(95%)", "NCA度量学习"]
+accuracies = [acc_original, acc_2d, acc_10d, acc_auto, acc_nca]
+dimensions = [64, 2, 10, pca_auto.n_components_, 64]
+info_retained = [1.0, info_2d, info_10d, info_auto, 1.0]
+
+# 创建画布：2行1列
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+
+colors = ["#2E86AB", "#A23B72", "#F18F01", "#2d6a4f", "#6a4c93"]
+
+# ---- 上图：准确率对比 ----
+bars1 = ax1.bar(methods, accuracies, color=colors, edgecolor='black', linewidth=1.2)
+ax1.set_ylim(0.4, 1.0)
+ax1.set_ylabel("分类准确率", fontsize=13)
+ax1.set_title("不同降维方案对 kNN 分类准确率的影响", fontsize=15, fontweight="bold")
+ax1.axhline(y=acc_original, color='red', linestyle='--', linewidth=1.5, alpha=0.6, label=f'基线: {acc_original:.4f}')
+ax1.legend(loc='lower right')
+ax1.grid(axis='y', linestyle='--', alpha=0.3)
+for bar, val in zip(bars1, accuracies):
+    ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.008, f'{val:.4f}', 
+             ha='center', va='bottom', fontsize=11, fontweight='bold')
+
+# ---- 下图：维度 + 信息保留率 ----
+ax2_bar = ax2
+ax2_line = ax2.twinx()
+
+bars2 = ax2_bar.bar(methods, dimensions, color=colors, alpha=0.7, edgecolor='black', linewidth=1.2, label='特征维度')
+ax2_bar.set_ylabel("特征维度", fontsize=13, color='blue')
+ax2_bar.tick_params(axis='y', labelcolor='blue')
+ax2_bar.grid(axis='y', linestyle='--', alpha=0.2)
+
+line = ax2_line.plot(methods, info_retained, color='red', marker='o', linewidth=2, markersize=10, label='信息保留率')
+ax2_line.set_ylabel("累计信息保留率", fontsize=13, color='red')
+ax2_line.tick_params(axis='y', labelcolor='red')
+ax2_line.set_ylim(0, 1.1)
+
+for bar, val in zip(bars2, dimensions):
+    ax2_bar.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1, f'{val}', 
+                 ha='center', va='bottom', fontsize=10, fontweight='bold', color='blue')
+
+for i, val in enumerate(info_retained):
+    ax2_line.text(i, val + 0.03, f'{val:.2%}', ha='center', va='bottom', fontsize=10, fontweight='bold', color='red')
+
+ax2_bar.set_xlabel("降维方案", fontsize=13)
+ax2_bar.set_title("各方案的特征维度与信息保留率对比", fontsize=15, fontweight="bold")
+
+lines1, labels1 = ax2_bar.get_legend_handles_labels()
+lines2, labels2 = ax2_line.get_legend_handles_labels()
+ax2_bar.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
+
+plt.tight_layout()
+plt.savefig("降维方案综合对比图.png", dpi=300, bbox_inches="tight")
+plt.show()
+print("✅ 综合对比图已保存：降维方案综合对比图.png\n")
+
+
+# ========== 9. 结果汇总表 ==========
+print("=" * 60)
+print("【实验结论汇总】")
+print("=" * 60)
+summary_df = pd.DataFrame({
+    "方案": methods,
+    "准确率": [f"{x:.4f}" for x in accuracies],
+    "特征维度": dimensions,
+    "信息保留率": [f"{x:.2%}" for x in info_retained]
+})
+print(summary_df.to_string(index=False))
+
+print("\n" + "=" * 60)
+print("【关键洞察】")
+print("=" * 60)
+print(f"1. 原始64维准确率最高：{acc_original:.4f}（作为性能天花板）")
+print(f"2. 降到2维准确率大幅下降：{acc_2d:.4f}，信息严重丢失（仅保留{info_2d:.2%}）")
+print(f"3. 降到10维准确率回弹：{acc_10d:.4f}，保留{info_10d:.2%}信息，性价比高")
+print(f"4. 自动选维({pca_auto.n_components_}维)准确率：{acc_auto:.4f}，甚至略超基线")
+print(f"5. NCA度量学习准确率：{acc_nca:.4f}，在保持64维的前提下优化了距离度量")
+print("=" * 60)

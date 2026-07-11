@@ -1,1 +1,354 @@
+#对数据的预处理和处理
+# ============================================================
+# 0. 导入库（所有代码块共用，务必先运行）
+# ============================================================
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
 
+plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Arial Unicode MS"]
+plt.rcParams["axes.unicode_minus"] = False
+
+CSV_PATH = "门店销售EDA数据集.csv"
+EXCEL_PATH = "门店销售EDA数据集.xlsx"
+OUT_DIR = "预处理输出结果"
+os.makedirs(OUT_DIR, exist_ok=True)
+# ============================================================
+# 第1题：读取数据，输出数据规模和字段类型
+# ============================================================
+if os.path.exists(CSV_PATH):
+    df = pd.read_csv(CSV_PATH, encoding="utf-8-sig")
+    print(f"已读取 CSV 文件：{CSV_PATH}")
+elif os.path.exists(EXCEL_PATH):
+    df = pd.read_excel(EXCEL_PATH, sheet_name=0)
+    print(f"已读取 Excel 文件：{EXCEL_PATH}")
+else:
+    raise FileNotFoundError("没有找到数据文件！")
+
+print("\n数据前5行：")
+print(df.head())
+
+print("\n数据规模（行，列）：")
+print(df.shape)
+
+print("\n字段名称：")
+print(df.columns.tolist())
+
+print("\n字段类型：")
+print(df.dtypes)
+# ============================================================
+# 第2题：缺失值统计表 + 输出具体缺失行编号
+# ============================================================
+
+# --- 先做字段格式统一 ---
+df_format = df.copy()
+if "销售日期" in df_format.columns:
+    df_format["销售日期"] = pd.to_datetime(df_format["销售日期"], errors="coerce")
+if "折扣率" in df_format.columns:
+    df_format["折扣率"] = (df_format["折扣率"].astype(str).str.replace("%", "", regex=False).str.strip())
+    df_format["折扣率"] = pd.to_numeric(df_format["折扣率"], errors="coerce")
+    if df_format["折扣率"].dropna().max() > 1:
+        df_format["折扣率"] = df_format["折扣率"] / 100
+
+# --- 1. 整体缺失值统计 ---
+missing_before = df_format.isna().sum()
+missing_ratio_before = df_format.isna().mean() * 100
+missing_table_before = pd.DataFrame({
+    "缺失值数量": missing_before,
+    "缺失比例(%)": missing_ratio_before.round(2)
+})
+missing_table_before = missing_table_before[missing_table_before["缺失值数量"] > 0].sort_values("缺失值数量", ascending=False)
+
+print("\n" + "="*60)
+print("【缺失值统计表】")
+print("="*60)
+print(missing_table_before)
+print("\n")
+
+# --- 2. 输出具体存在缺失值的行编号（行号从0开始，+1后变为从1开始）---
+rows_with_missing = df_format[df_format.isna().any(axis=1)]
+missing_rows_indices = rows_with_missing.index.tolist()  # 原始索引（从0开始）
+missing_rows_display = [i+1 for i in missing_rows_indices]  # 转为从1开始的行号
+
+print("="*60)
+print("【存在缺失值的行信息】")
+print("="*60)
+print(f"存在缺失值的行数（共）：{len(missing_rows_indices)} 行")
+print(f"对应的行号（Excel/表格中的行号，从1开始）：{missing_rows_display}")
+print("\n")
+
+# --- 3. 逐行列出每行缺失的具体字段 ---
+print("="*60)
+print("【每行缺失字段明细】")
+print("="*60)
+
+# 只保留有缺失的字段，方便查看
+missing_detail = rows_with_missing[rows_with_missing.columns[rows_with_missing.isna().any()]]
+for idx in missing_rows_indices:
+    missing_cols = df_format.columns[df_format.loc[idx].isna()].tolist()
+    # 行号显示为 Excel 行号（索引+1）
+    print(f"  第 {idx+1} 行：缺失字段 → {missing_cols}")
+
+print("\n")
+
+# --- 4. 按字段分组，显示每个缺失字段对应的具体行号 ---
+print("="*60)
+print("【按字段分组：每个缺失字段对应的行号】")
+print("="*60)
+for col in missing_table_before.index:
+    rows_with_null_in_col = df_format[df_format[col].isna()].index.tolist()
+    rows_display = [i+1 for i in rows_with_null_in_col]
+    print(f"  {col}（缺失 {len(rows_with_null_in_col)} 个）：行号 {rows_display}")
+
+print("\n")
+
+# --- 5. 执行缺失值处理（为后续题目准备数据）---
+df_missing = df_format.copy()
+numeric_missing_cols = ["单价", "购买数量", "顾客评分"]
+category_missing_cols = ["会员等级"]
+numeric_missing_cols = [col for col in numeric_missing_cols if col in df_missing.columns]
+category_missing_cols = [col for col in category_missing_cols if col in df_missing.columns]
+
+print("="*60)
+print("【缺失值处理方法】")
+print("="*60)
+
+for col in numeric_missing_cols:
+    median_val = df_missing[col].median()
+    df_missing[col] = df_missing[col].fillna(median_val)
+    print(f"  {col}：中位数填补（中位数 = {median_val:.2f}）")
+
+for col in category_missing_cols:
+    mode_val = df_missing[col].mode(dropna=True)[0]
+    df_missing[col] = df_missing[col].fillna(mode_val)
+    print(f"  {col}：众数填补（众数 = '{mode_val}'）")
+
+# --- 6. 验证处理结果 ---
+missing_after = df_missing.isna().sum()
+print("\n" + "="*60)
+print("【处理结果验证】")
+print("="*60)
+remaining_missing = missing_after[missing_after > 0]
+if len(remaining_missing) == 0:
+    print("  ✅ 所有缺失值已处理干净！")
+else:
+    print("  ⚠️ 以下字段仍有缺失值：")
+    print(remaining_missing)
+    # ============================================================
+# 第3题：IQR方法检查异常值（单价、购买数量、月销量、销售额）
+# ============================================================
+df_outlier = df_missing.copy()
+outlier_cols = ["单价", "购买数量", "月销量", "销售额"]
+outlier_cols = [col for col in outlier_cols if col in df_outlier.columns]
+
+print("\nIQR异常值检查结果：")
+print("-" * 55)
+
+for col in outlier_cols:
+    Q1 = df_outlier[col].quantile(0.25)
+    Q3 = df_outlier[col].quantile(0.75)
+    IQR = Q3 - Q1
+    lower_bound = Q1 - 1.5 * IQR
+    upper_bound = Q3 + 1.5 * IQR
+    outlier_count = ((df_outlier[col] < lower_bound) | (df_outlier[col] > upper_bound)).sum()
+    
+    print(f"{col}：")
+    print(f"  Q1={Q1:.2f}, Q3={Q3:.2f}, IQR={IQR:.2f}")
+    print(f"  下界={lower_bound:.2f}, 上界={upper_bound:.2f}")
+    print(f"  异常值数量={outlier_count}")
+    print("-" * 55)
+    # ============================================================
+# 第4题：截尾法处理异常值 + 处理前后箱线图（显示+保存）
+# ============================================================
+
+# --- 1. 保存处理前的数据，用于画对比图 ---
+df_before = df_outlier.copy()
+
+# --- 2. 对4个字段执行截尾处理 ---
+outlier_cols_all = ["单价", "购买数量", "月销量", "销售额"]
+outlier_cols_all = [col for col in outlier_cols_all if col in df_outlier.columns]
+
+print("\n执行截尾处理...")
+print("-" * 50)
+for col in outlier_cols_all:
+    Q1 = df_outlier[col].quantile(0.25)
+    Q3 = df_outlier[col].quantile(0.75)
+    IQR = Q3 - Q1
+    lower_bound = Q1 - 1.5 * IQR
+    upper_bound = Q3 + 1.5 * IQR
+    df_outlier[col] = df_outlier[col].clip(lower=lower_bound, upper=upper_bound)
+    print(f"  {col}：下界={lower_bound:.2f}，上界={upper_bound:.2f}，截尾完成")
+
+# --- 3. 画每个字段处理前后的箱线图（4个子图，一次性全显示）---
+fig, axes = plt.subplots(2, 2, figsize=(14, 10))  # 2行2列，共4个子图
+axes = axes.flatten()  # 展平为一维数组，方便循环
+
+for i, col in enumerate(outlier_cols_all):
+    # 准备处理前和处理后的数据
+    data_before = df_before[col].dropna()
+    data_after = df_outlier[col].dropna()
+    
+    # 画箱线图
+    bp = axes[i].boxplot([data_before, data_after], 
+                         labels=["处理前", "处理后"],
+                         patch_artist=True,  # 让箱体填充颜色
+                         boxprops=dict(facecolor="lightblue"),
+                         medianprops=dict(color="red", linewidth=2))
+    
+    # 设置标题和坐标轴
+    axes[i].set_title(f"{col} 截尾处理前后对比", fontsize=13, fontweight="bold")
+    axes[i].set_ylabel(col, fontsize=11)
+    axes[i].grid(axis="y", linestyle="--", alpha=0.3)
+    
+    # 在箱体上方标注异常值数量变化
+    outlier_before = ((data_before < data_before.quantile(0.25) - 1.5 * (data_before.quantile(0.75) - data_before.quantile(0.25))) | 
+                      (data_before > data_before.quantile(0.75) + 1.5 * (data_before.quantile(0.75) - data_before.quantile(0.25)))).sum()
+    outlier_after = ((data_after < data_after.quantile(0.25) - 1.5 * (data_after.quantile(0.75) - data_after.quantile(0.25))) | 
+                     (data_after > data_after.quantile(0.75) + 1.5 * (data_after.quantile(0.75) - data_after.quantile(0.25)))).sum()
+    
+    axes[i].text(0.5, -0.15, f"异常值数量：{outlier_before} → {outlier_after}", 
+                 ha="center", transform=axes[i].transAxes, fontsize=11, color="blue")
+
+plt.suptitle("异常值截尾处理前后箱线图对比（4个字段）", fontsize=16, fontweight="bold")
+plt.tight_layout()
+
+# --- 4. 显示图形（会弹出一个窗口）---
+plt.show()
+
+# --- 5. 同时保存图形到文件夹（贴报告用）---
+save_path = os.path.join(OUT_DIR, "09_四个字段异常值处理前后箱线图.png")
+plt.savefig(save_path, dpi=300, bbox_inches="tight")
+plt.close()  # 关闭图形，释放内存
+print(f"\n✅ 箱线图已保存：{save_path}")
+# ============================================================
+# 第5题：数值字段 StandardScaler 标准化
+# ============================================================
+df_standard = df_outlier.copy()
+standard_cols = ["单价", "购买数量", "折扣率", "顾客评分", "月销量", "销售额"]
+standard_cols = [col for col in standard_cols if col in df_standard.columns]
+
+scaler = StandardScaler()
+df_scaled = df_standard.copy()
+df_scaled[standard_cols] = scaler.fit_transform(df_scaled[standard_cols])
+
+print("\n标准化前（均值、标准差）：")
+print(df_standard[standard_cols].agg(["mean", "std"]).round(3))
+
+print("\n标准化后（均值、标准差）：")
+print(df_scaled[standard_cols].agg(["mean", "std"]).round(3))
+
+# 保存标准化后的数据（供第6题使用）
+df_standard_scaled = df_scaled
+# ============================================================
+# 第6题：类别独热编码 + 是否复购 0/1 编码
+# ============================================================
+df_encode = df_standard_scaled.copy()
+
+# --- 二分类映射 ---
+binary_map = {"否": 0, "是": 1}
+binary_cols = ["是否促销", "是否复购"]
+for col in binary_cols:
+    if col in df_encode.columns:
+        df_encode[col] = df_encode[col].map(binary_map)
+
+# --- 删除不建模字段，进行独热编码 ---
+drop_cols = ["订单编号", "销售日期"]
+drop_cols = [col for col in drop_cols if col in df_encode.columns]
+df_model = df_encode.drop(columns=drop_cols)
+
+onehot_cols = ["城市", "门店编号", "商品品类", "会员等级", "支付方式"]
+onehot_cols = [col for col in onehot_cols if col in df_model.columns]
+
+df_encoded = pd.get_dummies(df_model, columns=onehot_cols, drop_first=True)
+
+print(f"编码前字段数：{df_model.shape[1]}")
+print(f"编码后字段数：{df_encoded.shape[1]}")
+print("\n编码后数据前5行：")
+print(df_encoded.head())
+# ============================================================
+# 第7题：8:2 划分训练集/测试集 + 检查标签比例（含可视化）
+# ============================================================
+
+target_col = "是否复购"
+if target_col not in df_encoded.columns:
+    raise ValueError("数据中没有找到目标变量：是否复购")
+
+X = df_encoded.drop(columns=[target_col])
+y = df_encoded[target_col]
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+
+print("=" * 60)
+print("【数据集划分结果】")
+print("=" * 60)
+print(f"训练集特征维度：{X_train.shape}")
+print(f"测试集特征维度：{X_test.shape}")
+print(f"\n训练集样本数：{len(y_train)}，测试集样本数：{len(y_test)}")
+print(f"训练集占比：{len(y_train) / len(y) * 100:.1f}%")
+print(f"测试集占比：{len(y_test) / len(y) * 100:.1f}%")
+
+print("\n" + "=" * 60)
+print("【训练集标签分布】")
+print("=" * 60)
+print(y_train.value_counts(normalize=True).round(3))
+
+print("\n" + "=" * 60)
+print("【测试集标签分布】")
+print("=" * 60)
+print(y_test.value_counts(normalize=True).round(3))
+
+# --- 可视化标签比例（柱状图）---
+# 计算训练集和测试集的标签比例
+train_ratio = y_train.value_counts(normalize=True).sort_index()
+test_ratio = y_test.value_counts(normalize=True).sort_index()
+
+# 合并成一个DataFrame，方便画图
+split_compare = pd.DataFrame({
+    "训练集": train_ratio,
+    "测试集": test_ratio
+})
+split_compare.index = split_compare.index.map({0: "未复购 (0)", 1: "复购 (1)"})
+
+print("\n" + "=" * 60)
+print("【标签比例对比表】")
+print("=" * 60)
+print(split_compare)
+
+# --- 画图 ---
+fig, ax = plt.subplots(figsize=(10, 6))
+
+# 绘制分组柱状图
+split_compare.plot(kind="bar", ax=ax, color=["#4CAF50", "#FF6B6B"], alpha=0.8)
+
+# 添加标题和标签
+ax.set_title("训练集与测试集复购标签比例对比", fontsize=16, fontweight="bold", pad=15)
+ax.set_xlabel("是否复购", fontsize=13)
+ax.set_ylabel("样本比例", fontsize=13)
+ax.set_ylim(0, 1)
+ax.legend(fontsize=12, loc="upper right")
+ax.grid(axis="y", linestyle="--", alpha=0.3)
+ax.set_xticklabels(split_compare.index, rotation=0, fontsize=12)
+
+# 在柱子上添加数值标签
+for container in ax.containers:
+    ax.bar_label(container, fmt="{:.1%}", fontsize=11, padding=3, fontweight="bold")
+
+# 添加一条辅助线，表示50%的基准
+ax.axhline(y=0.5, color="gray", linestyle=":", alpha=0.5, linewidth=1)
+
+# 添加图例说明
+plt.tight_layout()
+
+# --- 显示图形（弹出窗口）---
+plt.show()
+
+# --- 同时保存图片（贴报告用）---
+save_path = os.path.join(OUT_DIR, "18_训练集与测试集标签比例对比.png")
+plt.savefig(save_path, dpi=300, bbox_inches="tight")
+plt.close()
+print(f"\n✅ 标签比例对比图已保存：{save_path}")

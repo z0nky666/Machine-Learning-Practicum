@@ -1,1 +1,317 @@
+# ==================================================
+# 特征选择实验 - 带可视化优化版
+# ==================================================
 
+import numpy as np
+import time
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.datasets import load_breast_cancer
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import StratifiedKFold, cross_val_score, GridSearchCV
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, roc_auc_score
+
+# 设置中文字体
+plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Arial Unicode MS"]
+plt.rcParams["axes.unicode_minus"] = False
+
+# ==================================================
+# 1. 数据集加载与预处理
+# ==================================================
+print("正在加载数据集...")
+data = load_breast_cancer()
+X_raw, y = data.data, data.target
+feature_names = data.feature_names
+
+scaler = MinMaxScaler()
+X = scaler.fit_transform(X_raw)
+
+print(f"数据集加载完成：样本数{X.shape[0]}，特征数{X.shape[1]}")
+print(f"类别分布：恶性{sum(y == 0)}例，良性{sum(y == 1)}例\n")
+
+
+# ==================================================
+# 2. Relief算法实现
+# ==================================================
+def relief(X_train, y_train, n_samples=100, random_state=42):
+    np.random.seed(random_state)
+    n, d = X_train.shape
+    scores = np.zeros(d)
+    sample_idx = np.random.choice(n, size=n_samples, replace=False)
+    for i in sample_idx:
+        x_i = X_train[i]
+        y_i = y_train[i]
+        same_idx = np.where(y_train == y_i)[0]
+        same_idx = same_idx[same_idx != i]
+        diff_idx = np.where(y_train != y_i)[0]
+        dist_same = np.sum((X_train[same_idx] - x_i) ** 2, axis=1)
+        nh_idx = same_idx[np.argmin(dist_same)]
+        x_nh = X_train[nh_idx]
+        dist_diff = np.sum((X_train[diff_idx] - x_i) ** 2, axis=1)
+        nm_idx = diff_idx[np.argmin(dist_diff)]
+        x_nm = X_train[nm_idx]
+        for j in range(d):
+            diff_nh = abs(x_i[j] - x_nh[j])
+            diff_nm = abs(x_i[j] - x_nm[j])
+            scores[j] += -diff_nh ** 2 + diff_nm ** 2
+    scores /= n_samples
+    return scores
+
+
+# ==================================================
+# 3. LVW算法实现
+# ==================================================
+def lvw(X_train, y_train, estimator, T=50, cv=3, random_state=42):
+    np.random.seed(random_state)
+    n, d = X_train.shape
+    best_subset = np.arange(d)
+    best_error = np.inf
+    t = 0
+    while t < T:
+        subset_size = np.random.randint(1, d + 1)
+        subset = np.random.choice(d, size=subset_size, replace=False)
+        subset.sort()
+        X_sub = X_train[:, subset]
+        acc_scores = cross_val_score(estimator, X_sub, y_train, cv=cv, scoring='accuracy')
+        current_error = 1 - np.mean(acc_scores)
+        if current_error < best_error or (current_error == best_error and len(subset) < len(best_subset)):
+            best_error = current_error
+            best_subset = subset
+            t = 0
+        else:
+            t += 1
+    return best_subset, best_error
+
+
+# ==================================================
+# 4. 5折交叉验证主实验
+# ==================================================
+random_state = 42
+n_splits = 5
+skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+
+result_dict = {
+    "全特征基线": {"准确率": [], "AUC": [], "特征数": [], "耗时": []},
+    "Relief前10%": {"准确率": [], "AUC": [], "特征数": [], "耗时": []},
+    "Relief前20%": {"准确率": [], "AUC": [], "特征数": [], "耗时": []},
+    "Relief前30%": {"准确率": [], "AUC": [], "特征数": [], "耗时": []},
+    "LVW包裹式": {"准确率": [], "AUC": [], "特征数": [], "耗时": []},
+    "L1嵌入式": {"准确率": [], "AUC": [], "特征数": [], "耗时": []}
+}
+
+fold = 1
+for train_idx, test_idx in skf.split(X, y):
+    print(f"===== 第 {fold} 折实验开始 =====")
+    X_train, X_test = X[train_idx], X[test_idx]
+    y_train, y_test = y[train_idx], y[test_idx]
+    total_feat = X_train.shape[1]
+
+    # 全特征基线
+    start = time.time()
+    clf_base = LogisticRegression(max_iter=1000, random_state=random_state)
+    clf_base.fit(X_train, y_train)
+    acc_base = accuracy_score(y_test, clf_base.predict(X_test))
+    auc_base = roc_auc_score(y_test, clf_base.predict_proba(X_test)[:, 1])
+    time_base = time.time() - start
+    result_dict["全特征基线"]["准确率"].append(acc_base)
+    result_dict["全特征基线"]["AUC"].append(auc_base)
+    result_dict["全特征基线"]["特征数"].append(total_feat)
+    result_dict["全特征基线"]["耗时"].append(time_base)
+
+    # Relief
+    start = time.time()
+    feat_scores = relief(X_train, y_train, n_samples=100, random_state=random_state)
+    sorted_feat_idx = np.argsort(-feat_scores)
+    k10, k20, k30 = int(0.1 * total_feat), int(0.2 * total_feat), int(0.3 * total_feat)
+    for name, k in zip(["Relief前10%", "Relief前20%", "Relief前30%"], [k10, k20, k30]):
+        selected = sorted_feat_idx[:k]
+        clf = LogisticRegression(max_iter=1000, random_state=random_state)
+        clf.fit(X_train[:, selected], y_train)
+        acc = accuracy_score(y_test, clf.predict(X_test[:, selected]))
+        auc = roc_auc_score(y_test, clf.predict_proba(X_test[:, selected])[:, 1])
+        result_dict[name]["准确率"].append(acc)
+        result_dict[name]["AUC"].append(auc)
+        result_dict[name]["特征数"].append(k)
+        result_dict[name]["耗时"].append((time.time() - start) / 3)
+
+    # LVW
+    start = time.time()
+    inner_clf = LogisticRegression(max_iter=1000, random_state=random_state)
+    best_subset, _ = lvw(X_train, y_train, inner_clf, T=50, cv=3, random_state=random_state + fold)
+    clf_lvw = LogisticRegression(max_iter=1000, random_state=random_state)
+    clf_lvw.fit(X_train[:, best_subset], y_train)
+    acc_lvw = accuracy_score(y_test, clf_lvw.predict(X_test[:, best_subset]))
+    auc_lvw = roc_auc_score(y_test, clf_lvw.predict_proba(X_test[:, best_subset])[:, 1])
+    time_lvw = time.time() - start
+    result_dict["LVW包裹式"]["准确率"].append(acc_lvw)
+    result_dict["LVW包裹式"]["AUC"].append(auc_lvw)
+    result_dict["LVW包裹式"]["特征数"].append(len(best_subset))
+    result_dict["LVW包裹式"]["耗时"].append(time_lvw)
+
+    # L1嵌入式
+    start = time.time()
+    param_grid = {"C": [0.01, 0.05, 0.1, 0.5, 1, 5, 10]}
+    l1_clf = LogisticRegression(penalty="l1", solver="liblinear", max_iter=1000, random_state=random_state)
+    grid = GridSearchCV(l1_clf, param_grid, cv=3, scoring="accuracy")
+    grid.fit(X_train, y_train)
+    best_l1 = grid.best_estimator_
+    n_selected = np.sum(np.abs(best_l1.coef_[0]) > 1e-6)
+    acc_l1 = accuracy_score(y_test, best_l1.predict(X_test))
+    auc_l1 = roc_auc_score(y_test, best_l1.predict_proba(X_test)[:, 1])
+    time_l1 = time.time() - start
+    result_dict["L1嵌入式"]["准确率"].append(acc_l1)
+    result_dict["L1嵌入式"]["AUC"].append(auc_l1)
+    result_dict["L1嵌入式"]["特征数"].append(n_selected)
+    result_dict["L1嵌入式"]["耗时"].append(time_l1)
+
+    print(f"全特征基线 | 准确率:{acc_base:.4f} AUC:{auc_base:.4f}")
+    print(f"Relief前20% | 准确率:{result_dict['Relief前20%']['准确率'][-1]:.4f}")
+    print(f"LVW包裹式 | 准确率:{acc_lvw:.4f} 特征数:{len(best_subset)} 耗时:{time_lvw:.4f}s")
+    print(f"L1嵌入式 | 准确率:{acc_l1:.4f} 特征数:{n_selected} 耗时:{time_l1:.4f}s\n")
+    fold += 1
+
+
+# ==================================================
+# 5. 可视化：4张对比图
+# ==================================================
+print("=" * 60)
+print("正在生成可视化对比图...")
+print("=" * 60)
+
+# 计算各方法的平均指标
+methods = list(result_dict.keys())
+mean_acc = [np.mean(result_dict[m]["准确率"]) for m in methods]
+mean_auc = [np.mean(result_dict[m]["AUC"]) for m in methods]
+mean_feat = [np.mean(result_dict[m]["特征数"]) for m in methods]
+mean_time = [np.mean(result_dict[m]["耗时"]) for m in methods]
+
+# 方法名称简化（用于显示）
+display_names = ["全特征\n基线", "Relief\n前10%", "Relief\n前20%", "Relief\n前30%", "LVW\n包裹式", "L1\n嵌入式"]
+
+# 颜色方案
+colors = ["#2E86AB", "#A23B72", "#F18F01", "#c73e1d", "#2d6a4f", "#6a4c93"]
+
+# ==================================================
+# 图1：准确率对比柱状图
+# ==================================================
+fig, ax = plt.subplots(figsize=(10, 6))
+bars = ax.bar(display_names, mean_acc, color=colors, edgecolor='black', linewidth=1.2)
+ax.set_ylim(0.90, 0.98)
+ax.set_ylabel("平均准确率", fontsize=13)
+ax.set_title("不同特征选择方法的分类准确率对比", fontsize=15, fontweight="bold")
+ax.axhline(y=mean_acc[0], color='red', linestyle='--', linewidth=1.5, alpha=0.6, label=f'基线: {mean_acc[0]:.4f}')
+ax.legend(loc='lower right')
+ax.grid(axis='y', linestyle='--', alpha=0.3)
+for bar, val in zip(bars, mean_acc):
+    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.001, f'{val:.4f}', 
+            ha='center', va='bottom', fontsize=11, fontweight='bold')
+plt.tight_layout()
+plt.savefig("01_准确率对比.png", dpi=300, bbox_inches="tight")
+plt.show()
+print("✅ 已保存：01_准确率对比.png")
+
+
+# ==================================================
+# 图2：特征数量对比柱状图
+# ==================================================
+fig, ax = plt.subplots(figsize=(10, 6))
+bars = ax.bar(display_names, mean_feat, color=colors, edgecolor='black', linewidth=1.2)
+ax.set_ylabel("平均保留特征数", fontsize=13)
+ax.set_title("不同特征选择方法的特征压缩效果对比", fontsize=15, fontweight="bold")
+ax.axhline(y=mean_feat[0], color='red', linestyle='--', linewidth=1.5, alpha=0.6, label=f'原始特征数: {mean_feat[0]:.0f}')
+ax.legend(loc='upper right')
+ax.grid(axis='y', linestyle='--', alpha=0.3)
+for bar, val in zip(bars, mean_feat):
+    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.3, f'{val:.0f}', 
+            ha='center', va='bottom', fontsize=11, fontweight='bold')
+plt.tight_layout()
+plt.savefig("02_特征数量对比.png", dpi=300, bbox_inches="tight")
+plt.show()
+print("✅ 已保存：02_特征数量对比.png")
+
+
+# ==================================================
+# 图3：准确率 vs 特征数 散点图（四象限分析）
+# ==================================================
+fig, ax = plt.subplots(figsize=(10, 6))
+for i, method in enumerate(methods):
+    ax.scatter(mean_feat[i], mean_acc[i], s=300, color=colors[i], 
+               edgecolor='black', linewidth=2, label=display_names[i], zorder=5)
+    ax.annotate(display_names[i].replace('\n', ' '), 
+                (mean_feat[i], mean_acc[i]), 
+                xytext=(8, 8), textcoords='offset points', fontsize=10, fontweight='bold')
+
+# 添加参考线
+ax.axhline(y=mean_acc[0], color='red', linestyle='--', alpha=0.4, label=f'基线准确率: {mean_acc[0]:.4f}')
+ax.axvline(x=mean_feat[0], color='gray', linestyle='--', alpha=0.4, label=f'原始特征数: {mean_feat[0]:.0f}')
+
+ax.set_xlabel("平均保留特征数", fontsize=13)
+ax.set_ylabel("平均准确率", fontsize=13)
+ax.set_title("特征选择效果：准确率 vs 特征压缩（越往左上角越好）", fontsize=14, fontweight="bold")
+ax.legend(loc='lower left', fontsize=10)
+ax.grid(True, linestyle='--', alpha=0.3)
+plt.tight_layout()
+plt.savefig("03_准确率vs特征数散点图.png", dpi=300, bbox_inches="tight")
+plt.show()
+print("✅ 已保存：03_准确率vs特征数散点图.png")
+
+
+# ==================================================
+# 图4：Relief特征重要性Top10条形图
+# ==================================================
+# 从最后一折获取Relief得分（已在循环中计算）
+sorted_names = feature_names[sorted_feat_idx]
+sorted_scores = feat_scores[sorted_feat_idx]
+
+fig, ax = plt.subplots(figsize=(10, 7))
+top_n = 10
+bars = ax.barh(sorted_names[:top_n][::-1], sorted_scores[:top_n][::-1], 
+               color=plt.cm.RdYlGn_r(np.linspace(0.2, 0.8, top_n)))
+ax.set_xlabel("Relief重要性得分", fontsize=13)
+ax.set_title("Relief算法特征重要性排名 Top10", fontsize=15, fontweight="bold")
+ax.grid(axis='x', linestyle='--', alpha=0.3)
+
+# 在条形末端添加数值标签
+for bar in bars:
+    ax.text(bar.get_width() + 0.0005, bar.get_y() + bar.get_height()/2, 
+            f'{bar.get_width():.4f}', ha='left', va='center', fontsize=10, fontweight='bold')
+
+plt.tight_layout()
+plt.savefig("04_Relief特征重要性Top10.png", dpi=300, bbox_inches="tight")
+plt.show()
+print("✅ 已保存：04_Relief特征重要性Top10.png")
+
+
+# ==================================================
+# 6. 控制台输出结果汇总
+# ==================================================
+print("\n" + "=" * 80)
+print("特征选择方法对比实验结果（5折交叉验证均值）")
+print("=" * 80)
+print(f"{'方法':<15} {'平均准确率':<12} {'平均AUC':<10} {'平均特征数':<12} {'平均耗时(s)':<12}")
+print("-" * 80)
+
+for method in methods:
+    mean_acc_val = np.mean(result_dict[method]["准确率"])
+    mean_auc_val = np.mean(result_dict[method]["AUC"])
+    mean_feat_val = np.mean(result_dict[method]["特征数"])
+    mean_time_val = np.mean(result_dict[method]["耗时"])
+    print(f"{method:<15} {mean_acc_val:.4f}        {mean_auc_val:.4f}      {mean_feat_val:.1f}          {mean_time_val:.4f}")
+
+print("=" * 80)
+
+# 输出Relief Top10
+print("\n" + "=" * 80)
+print("Relief算法特征重要性排名 Top10（得分越高区分能力越强）：")
+print("=" * 80)
+for i in range(10):
+    print(f"第{i+1:2d}名：{sorted_names[i]:<30} 得分：{sorted_scores[i]:.6f}")
+print("\n" + "=" * 80)
+print("所有可视化图片已保存到当前目录！")
+print("图片列表：")
+print("  01_准确率对比.png")
+print("  02_特征数量对比.png")
+print("  03_准确率vs特征数散点图.png")
+print("  04_Relief特征重要性Top10.png")
+print("=" * 80)

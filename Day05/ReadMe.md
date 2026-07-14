@@ -7,4 +7,4 @@
 <br>
 感谢杨立军老师的教导！感谢学院开设课程！
 <br>
-Stay Hungry,Stay Folish.
+Stay Hungry,Stay Foolish.
